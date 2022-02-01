@@ -212,6 +212,10 @@ void epd_poweroff();
 /** Clear the whole screen by flashing it. */
 void epd_clear();
 
+int utf8_len(const uint8_t ch);
+uint32_t next_cp(const uint8_t **string);
+int epd_get_chars_in_x_bounds(const EpdFont *font, const char *string, const EpdFontProperties *properties, const int x_pixels, int *string_offset, int *lastWhitespaceOffset);
+
 /**
  * Clear an area by flashing it.
  *
