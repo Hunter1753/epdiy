@@ -41,9 +41,9 @@ static tinfl_decompressor decomp;
 static inline int min(int x, int y) { return x < y ? x : y; }
 static inline int max(int x, int y) { return x > y ? x : y; }
 
-static int utf8_len(const uint8_t ch) {
+int utf8_len(const uint8_t ch) {
   int len = 0;
-  for (utf_t **u = utf; (*u)->mask; ++u) {
+  for (utf_t **u = utf; *u; ++u) {
     if ((ch & ~(*u)->mask) == (*u)->lead) {
       break;
     }
@@ -55,7 +55,7 @@ static int utf8_len(const uint8_t ch) {
   return len;
 }
 
-static uint32_t next_cp(const uint8_t **string) {
+uint32_t next_cp(const uint8_t **string) {
   if (**string == 0) {
     return 0;
   }
@@ -111,7 +111,8 @@ static int uncompress(uint8_t *dest, uint32_t uncompressed_size, const uint8_t *
    @brief   Draw a single character to a pre-allocated buffer.
 */
 static enum EpdDrawError IRAM_ATTR draw_char(const EpdFont *font, uint8_t *buffer,
-                                int *cursor_x, int cursor_y, uint32_t cp,
+                                int *cursor_x, int cursor_y, uint16_t buf_width,
+                                uint16_t buf_height, uint32_t cp,
                                 const EpdFontProperties *props) {
 
   assert(props != NULL);
@@ -154,12 +155,15 @@ static enum EpdDrawError IRAM_ATTR draw_char(const EpdFont *font, uint8_t *buffe
 
   for (int y = 0; y < height; y++) {
     int yy = cursor_y - glyph->top + y;
+    if (yy < 0 || yy >= epd_rotated_display_height()) {
+      continue;
+    }
     int start_pos = *cursor_x + left;
     bool byte_complete = start_pos % 2;
     int x = max(0, -start_pos);
-    int max_x = start_pos + width;
+    int max_x = min(start_pos + width, buf_width * 2);
     uint8_t color;
-
+    
     for (int xx = start_pos; xx < max_x; xx++) {
       uint8_t bm = bitmap[y * byte_width + x / 2];
       if ((x & 1) == 0) {
@@ -254,6 +258,48 @@ void epd_get_text_bounds(const EpdFont *font, const char *string,
   *h = maxy - miny;
 }
 
+int epd_get_chars_in_x_bounds(const EpdFont *font, const char *string, const EpdFontProperties *properties, const int x_pixels, int *string_offset, int *lastWhitespaceOffset) {
+  assert(properties != NULL);
+  EpdFontProperties props = *properties;
+
+  *lastWhitespaceOffset = -1;
+
+  if (*string == '\0') {
+    return 0;
+  }
+  int minx = 100000, miny = 100000, maxx = -1, maxy = -1;
+  int temp_x = 0;
+  int temp_y = 0;
+
+  const uint8_t **newString = (const uint8_t **)&string;
+
+  for(int j = 0; j < *string_offset; j++){
+    if (**newString == 0) {
+      break;
+    }
+    int bytes = utf8_len(**newString);
+    *newString += bytes;
+  }
+
+  int i = 0;
+  uint32_t c;
+  while ((c = next_cp(newString))) {
+    get_char_bounds(font, c, &temp_x, &temp_y, &minx, &miny, &maxx, &maxy, &props);
+    int w = maxx - min(0, minx);
+    // printf("w:%d\n",w);
+    if(w > x_pixels){
+      break;
+    } else {
+      if(c == ' ' || c == '\t' || c == '-' || c == '\\'){
+        *lastWhitespaceOffset = i;
+      }
+      i++;
+    }
+  }
+  *string_offset += i;
+  return i;
+}
+
 static enum EpdDrawError epd_write_line(
         const EpdFont *font, const char *string, int *cursor_x,
         int *cursor_y, uint8_t *framebuffer,
@@ -273,7 +319,7 @@ static enum EpdDrawError epd_write_line(
 
   // alignments are mutually exclusive!
   if ((alignment & (alignment - 1)) != 0) {
-	return EPD_DRAW_INVALID_FONT_FLAGS;
+  return EPD_DRAW_INVALID_FONT_FLAGS;
   }
 
 
@@ -287,6 +333,8 @@ static enum EpdDrawError epd_write_line(
       return EPD_DRAW_NO_DRAWABLE_CHARACTERS;
   }
 
+  int buf_width = EPD_WIDTH / 2;
+  int buf_height = EPD_HEIGHT;
 
   uint8_t* buffer = framebuffer;
   int local_cursor_x = *cursor_x;
@@ -297,19 +345,19 @@ static enum EpdDrawError epd_write_line(
   int cursor_y_init = local_cursor_y;
 
   switch (alignment) {
-	case EPD_DRAW_ALIGN_LEFT: {
-	  break;
-	}
+  case EPD_DRAW_ALIGN_LEFT: {
+    break;
+  }
     case EPD_DRAW_ALIGN_CENTER: {
-	  local_cursor_x -= w / 2;
-	  break;
-	}
+    local_cursor_x -= w / 2;
+    break;
+  }
     case EPD_DRAW_ALIGN_RIGHT: {
-	  local_cursor_x -= w;
-	  break;
-	}
-	default:
-	  break;
+    local_cursor_x -= w;
+    break;
+  }
+  default:
+    break;
   }
 
   uint8_t bg = props.bg_color;
@@ -321,7 +369,8 @@ static enum EpdDrawError epd_write_line(
   }
   enum EpdDrawError err = EPD_DRAW_SUCCESS;
   while ((c = next_cp((const uint8_t **)&string))) {
-    err |= draw_char(font, buffer, &local_cursor_x, local_cursor_y, c, &props);
+    err |= draw_char(font, buffer, &local_cursor_x, local_cursor_y, buf_width,
+              buf_height, c, &props);
   }
 
   *cursor_x += local_cursor_x - cursor_x_init;
